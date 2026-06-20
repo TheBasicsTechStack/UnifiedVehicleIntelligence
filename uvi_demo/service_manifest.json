@@ -1,0 +1,73 @@
+{
+  "services": [
+    {
+      "name": "mock_can_gateway",
+      "module": "uvi_demo.services.mock_can_gateway",
+      "depends_on": []
+    },
+    {
+      "name": "kuksa_data_broker",
+      "module": "uvi_demo.broker.kuksa_placeholder",
+      "depends_on": ["mock_can_gateway"]
+    },
+    {
+      "name": "powertrain_services",
+      "module": "uvi_demo.services.powertrain_services",
+      "depends_on": ["kuksa_data_broker"]
+    },
+    {
+      "name": "chassis_services",
+      "module": "uvi_demo.services.chassis_services",
+      "depends_on": ["kuksa_data_broker"]
+    },
+    {
+      "name": "body_services",
+      "module": "uvi_demo.services.body_services",
+      "depends_on": ["kuksa_data_broker"]
+    },
+    {
+      "name": "adas_services",
+      "module": "uvi_demo.services.adas_services",
+      "depends_on": ["kuksa_data_broker"]
+    },
+    {
+      "name": "infotainment_services",
+      "module": "uvi_demo.services.infotainment_services",
+      "depends_on": ["kuksa_data_broker"]
+    },
+    {
+      "name": "connectivity_services",
+      "module": "uvi_demo.services.connectivity_services",
+      "depends_on": ["kuksa_data_broker"]
+    },
+    {
+      "name": "driver_monitoring_services",
+      "module": "uvi_demo.services.driver_monitoring_services",
+      "depends_on": ["kuksa_data_broker"]
+    },
+    {
+      "name": "vehicle_health_services",
+      "module": "uvi_demo.services.vehicle_health_services",
+      "depends_on": ["kuksa_data_broker"]
+    },
+    {
+      "name": "dashboard_application",
+      "module": "uvi_demo.ui.cockpit_screen",
+      "depends_on": [
+        "powertrain_services",
+        "chassis_services",
+        "body_services",
+        "adas_services",
+        "infotainment_services",
+        "connectivity_services",
+        "driver_monitoring_services",
+        "vehicle_health_services"
+      ]
+    },
+    {
+      "name": "uvi_companion",
+      "module": "uvi_demo.services.uvi_companion_services",
+      "depends_on": ["kuksa_data_broker"]
+    }
+  ]
+}

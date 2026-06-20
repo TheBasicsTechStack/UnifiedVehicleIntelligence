@@ -1,0 +1,1 @@
+"""Steering wheel visual widget."""

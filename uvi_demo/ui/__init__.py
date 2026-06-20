@@ -1,0 +1,1 @@
+"""Cockpit user interface package."""
