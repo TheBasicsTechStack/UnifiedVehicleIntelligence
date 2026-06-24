@@ -5,12 +5,16 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF, QRadialGradient
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QVBoxLayout, QWidget
+
+from uvi_demo.services.mock_can_gateway import CANFrame, CANGWService
+from uvi_demo.simulator.episode_data_generator import EpisodeDataGenerator, EpisodeScript
 
 
 ASSET_DIR = Path(__file__).resolve().parents[1] / "assets"
@@ -35,6 +39,14 @@ class SimulationState:
     steering: float = 0.0
     rain: float = 0.0
     wiper_phase: float = 0.0
+    route_eta_min: int = 22
+    route_type: str = "NH48"
+    weather_label: str = "Clear drive"
+    traffic_level: str = "Stable"
+    health_status: str = "Nominal"
+    episode_name: str = "Manual simulation"
+    script_controlled: bool = False
+    latest_signals: dict[str, Any] | None = None
     companion_message: str = "Route clear. Watching range, traffic, and road conditions."
 
     @property
@@ -44,16 +56,21 @@ class SimulationState:
     def advance(self) -> None:
         self.tick += 1
         t = self.tick / 24.0
-        self.target_speed = 48.0 + 7.0 * math.sin(t / 6.8) + 2.5 * math.sin(t / 2.4)
+        if not self.script_controlled:
+            self.target_speed = 48.0 + 7.0 * math.sin(t / 6.8) + 2.5 * math.sin(t / 2.4)
         self.speed += (self.target_speed - self.speed) * 0.04
         self.steering = 4.5 * math.sin(t / 4.8) + 1.5 * math.sin(t / 1.9)
         self.lane_phase = (self.lane_phase + max(self.speed, 10.0) * 0.0022) % 1.0
         self.traffic_phase = (self.traffic_phase + max(self.speed, 10.0) * 0.00085) % 1.0
-        self.rain = max(0.0, math.sin(t / 9.5) * 0.85)
+        if not self.script_controlled:
+            self.rain = max(0.0, math.sin(t / 9.5) * 0.85)
         self.wiper_phase = (self.wiper_phase + 0.015 + self.rain * 0.055) % 1.0
-        self.battery = max(0.0, self.battery - 0.001 - self.speed * 0.00001)
-        self.range_km = max(0.0, self.range_km - self.speed * 0.000034)
+        if not self.script_controlled:
+            self.battery = max(0.0, self.battery - 0.001 - self.speed * 0.00001)
+            self.range_km = max(0.0, self.range_km - self.speed * 0.000034)
 
+        if self.script_controlled:
+            return
         if self.rain > 0.48:
             self.companion_message = "Rain building. Visibility and traction are being monitored."
         elif self.speed > 86:
@@ -61,13 +78,80 @@ class SimulationState:
         else:
             self.companion_message = "Traffic flow stable. Keeping lane assist and range in view."
 
+    def apply_signals(self, episode_name: str, signals: dict[str, Any]) -> None:
+        """Apply gateway signals to the cockpit simulation state."""
+        self.script_controlled = True
+        self.episode_name = episode_name
+        self.latest_signals = dict(signals)
+        if "VEH_SPEED" in signals:
+            self.target_speed = float(signals["VEH_SPEED"])
+        if "BMS_SOC" in signals:
+            self.battery = float(signals["BMS_SOC"])
+        if "BMS_RANGE_KM" in signals:
+            self.range_km = float(signals["BMS_RANGE_KM"])
+        if "NAV_ETA_MIN" in signals:
+            self.route_eta_min = int(signals["NAV_ETA_MIN"])
+        if "NAV_ROUTE_TYPE" in signals:
+            self.route_type = str(signals["NAV_ROUTE_TYPE"])
+        if "TRAFFIC_LEVEL" in signals:
+            self.traffic_level = str(signals["TRAFFIC_LEVEL"])
+        if "WEATHER_CURRENT" in signals:
+            weather = str(signals["WEATHER_CURRENT"])
+            self.weather_label = weather
+            self.rain = 0.86 if "rain" in weather.lower() else 0.52 if "fog" in weather.lower() else 0.0
+        if "WEATHER_VISIBILITY_PERCENT" in signals and "WEATHER_CURRENT" not in signals:
+            visibility = float(signals["WEATHER_VISIBILITY_PERCENT"])
+            self.weather_label = f"Visibility {visibility:.0f}%"
+            self.rain = max(self.rain, (100.0 - visibility) / 100.0)
+
+        self.health_status = self._health_from_signals(signals)
+        self.companion_message = self._message_from_signals(signals)
+
+    def _health_from_signals(self, signals: dict[str, Any]) -> str:
+        if signals.get("SECURITY_EVENT_ACTIVE") or signals.get("CYBER_THREAT_LEVEL") == "HIGH":
+            return "Security alert"
+        if signals.get("TIRE_WARNING"):
+            return "Tire warning"
+        if signals.get("BATTERY_WARNING"):
+            return "Battery warning"
+        if signals.get("VEHICLE_HEALTH_STATUS"):
+            return str(signals["VEHICLE_HEALTH_STATUS"]).replace("_", " ").title()
+        return self.health_status if self.script_controlled else "Nominal"
+
+    def _message_from_signals(self, signals: dict[str, Any]) -> str:
+        if signals.get("CHARGER_AVAILABLE"):
+            distance = signals.get("CHARGER_DISTANCE_KM", "?")
+            return f"Charging option detected {distance} km ahead."
+        if signals.get("COFFEE_NEARBY") or signals.get("FAVORITE_COFFEE_NEARBY"):
+            distance = signals.get("COFFEE_DISTANCE_KM", signals.get("FAVORITE_COFFEE_DISTANCE_KM", "?"))
+            return f"Preferred stop available {distance} km ahead."
+        if signals.get("REAR_PASSENGER_COMFORT_ISSUE"):
+            return "Rear cabin comfort issue detected. Adjusting airflow recommendation."
+        if signals.get("FLIGHT_DELAY_MIN"):
+            return f"Flight delay detected. Arrival plan updated by {signals['FLIGHT_DELAY_MIN']} min."
+        if signals.get("SECURITY_EVENT_ACTIVE"):
+            return "Security event active. Monitoring access and cyber signals."
+        if signals.get("TIRE_WARNING"):
+            return "Tire pressure trend needs attention."
+        if signals.get("DMS_FATIGUE_SCORE", 0) >= 0.7:
+            return "Driver fatigue rising. Planning a safer stop."
+        return f"{self.episode_name} signals are active through CANGW."
+
 
 class CockpitScreen(QWidget):
     """Layered cockpit: outside world, interior foreground, live HUD."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        can_gateway: CANGWService | None = None,
+        generator: EpisodeDataGenerator | None = None,
+        show_simulator_panel: bool = True,
+    ) -> None:
         super().__init__()
         self.state = SimulationState()
+        self.can_gateway = can_gateway or CANGWService()
+        self.generator = generator or EpisodeDataGenerator(self.can_gateway)
+        self._episode_names: dict[str, str] = {}
         self.setObjectName("cockpit")
         self.setStyleSheet(
             """
@@ -100,6 +184,42 @@ class CockpitScreen(QWidget):
                 color: #b1d8dd;
                 font-size: 12px;
             }
+            QFrame#simulatorPanel {
+                background: rgba(3, 12, 18, 225);
+                border: 1px solid rgba(71, 227, 245, 100);
+                border-radius: 8px;
+            }
+            QComboBox, QListWidget {
+                background: #06131a;
+                border: 1px solid #16444f;
+                border-radius: 6px;
+                color: #dffbff;
+                font-size: 12px;
+            }
+            QPushButton#simButton {
+                background: #0b2b34;
+                border: 1px solid #38dceb;
+                border-radius: 6px;
+                color: #eafbff;
+                font-size: 12px;
+                font-weight: 800;
+                padding: 7px 10px;
+            }
+            QPushButton#simButton:hover {
+                background: #124250;
+            }
+            QProgressBar {
+                background: #06131a;
+                border: 1px solid #16444f;
+                border-radius: 5px;
+                color: #eafbff;
+                text-align: center;
+                height: 14px;
+            }
+            QProgressBar::chunk {
+                background: #38dceb;
+                border-radius: 4px;
+            }
             """
         )
 
@@ -127,6 +247,12 @@ class CockpitScreen(QWidget):
         self.display = PanoramicDisplay(self.state)
         layout.addWidget(self.display, 1, 2, 1, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+        if show_simulator_panel:
+            self.simulator_panel = SimulatorPanel(self.generator)
+            layout.addWidget(self.simulator_panel, 0, 0, 3, 4, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+        self._episode_names = {script.episode_id: script.episode_name for script in self.generator.list_episodes()}
+        self.can_gateway.frame_received.connect(self._on_can_frame)
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._advance_simulation)
         self.timer.start(33)
@@ -136,6 +262,95 @@ class CockpitScreen(QWidget):
         self.canvas.update()
         self.cluster.refresh()
         self.display.refresh()
+
+    def _on_can_frame(self, frame: CANFrame) -> None:
+        episode_name = self._episode_names.get(frame.episode_id, frame.episode_id)
+        self.state.apply_signals(episode_name, frame.signals)
+        self.cluster.refresh()
+        self.display.refresh()
+
+
+class SimulatorPanel(QFrame):
+    """Episode selector and CANGW signal monitor."""
+
+    def __init__(self, generator: EpisodeDataGenerator) -> None:
+        super().__init__()
+        self.generator = generator
+        self.setObjectName("simulatorPanel")
+        self.setFixedSize(410, 330)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(9)
+
+        title = QLabel("Data Generator Simulator")
+        title.setObjectName("panelTitle")
+        self.episode_select = QComboBox()
+        for script in self.generator.list_episodes():
+            self.episode_select.addItem(f"{script.episode_id}  {script.episode_name}", script.episode_id)
+
+        controls = QHBoxLayout()
+        self.play_button = QPushButton("Play")
+        self.play_button.setObjectName("simButton")
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setObjectName("simButton")
+        controls.addWidget(self.play_button)
+        controls.addWidget(self.stop_button)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(0)
+
+        self.status = QLabel("Select an episode script")
+        self.status.setObjectName("smallText")
+        self.status.setWordWrap(True)
+
+        self.log = QListWidget()
+        self.log.setFixedHeight(150)
+
+        layout.addWidget(title)
+        layout.addWidget(self.episode_select)
+        layout.addLayout(controls)
+        layout.addWidget(self.progress)
+        layout.addWidget(self.status)
+        layout.addWidget(self.log)
+
+        self.play_button.clicked.connect(self._play_selected)
+        self.stop_button.clicked.connect(self._stop)
+        self.generator.episode_started.connect(self._episode_started)
+        self.generator.event_pushed.connect(self._event_pushed)
+        self.generator.playback_progress.connect(self._progress)
+        self.generator.playback_finished.connect(self._finished)
+
+    def _play_selected(self) -> None:
+        episode_id = self.episode_select.currentData()
+        self.generator.play(str(episode_id))
+
+    def _stop(self) -> None:
+        self.generator.stop()
+        self.status.setText("Playback stopped")
+
+    def _episode_started(self, script: EpisodeScript) -> None:
+        self.log.clear()
+        self.progress.setValue(0)
+        self.status.setText(f"Real-time 8 min playback: {script.episode_id} through CANGWService")
+
+    def _event_pushed(self, event, frame: CANFrame) -> None:
+        keys = ", ".join(sorted(event.signals.keys())[:5])
+        extra = max(0, len(event.signals) - 5)
+        suffix = f" +{extra}" if extra else ""
+        source = "script" if event.authored else "live"
+        item = QListWidgetItem(f"t+{event.time_sec:03.0f}s  #{frame.sequence}  {source}  {keys}{suffix}")
+        self.log.insertItem(0, item)
+        while self.log.count() > 8:
+            self.log.takeItem(self.log.count() - 1)
+
+    def _progress(self, elapsed: float, duration: float) -> None:
+        value = 0 if duration <= 0 else int((elapsed / duration) * 1000)
+        self.progress.setValue(max(0, min(1000, value)))
+
+    def _finished(self, script: EpisodeScript) -> None:
+        self.status.setText(f"Completed {script.episode_id}")
 
 
 class DriveVideoBackdrop(QVideoWidget):
@@ -589,7 +804,7 @@ class InstrumentCluster(QFrame):
     def refresh(self) -> None:
         self.speed.setText(f"{self.state.speed:02.0f}")
         traction = "wet road" if self.state.rain > 0.48 else "traction normal"
-        self.status.setText(f"km/h | lane assist | {traction}")
+        self.status.setText(f"km/h | {self.state.traffic_level.lower()} traffic | {traction}")
 
 
 class PanoramicDisplay(QFrame):
@@ -633,7 +848,7 @@ class PanoramicDisplay(QFrame):
 
     def refresh(self) -> None:
         self.energy_value.setText(f"{self.state.battery:02.0f}%  {self.state.range_km:03.0f} km")
-        self.route_value.setText("NH48  22 min")
-        self.weather_value.setText("Rain active" if self.state.rain > 0.48 else "Clear drive")
-        self.health_value.setText("Nominal")
+        self.route_value.setText(f"{self.state.route_type}  {self.state.route_eta_min} min")
+        self.weather_value.setText(self.state.weather_label)
+        self.health_value.setText(self.state.health_status)
         self.companion_value.setText(self.state.companion_message)

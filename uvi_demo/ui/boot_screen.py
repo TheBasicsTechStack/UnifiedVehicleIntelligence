@@ -35,7 +35,7 @@ BOOT_STEPS = [
 class BootScreen(QMainWindow):
     """Fullscreen ignition and boot shell."""
 
-    def __init__(self) -> None:
+    def __init__(self, cockpit_screen: QWidget | None = None) -> None:
         super().__init__()
         self.setWindowTitle("Unified Vehicle Intelligence")
         self._step_index = 0
@@ -135,7 +135,7 @@ class BootScreen(QMainWindow):
         root.addLayout(footer)
 
         self.stack.addWidget(self.boot_page)
-        self.stack.addWidget(CockpitScreen())
+        self.stack.addWidget(cockpit_screen or CockpitScreen())
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.advance_boot)
