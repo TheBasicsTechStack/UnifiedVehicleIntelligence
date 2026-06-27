@@ -12,6 +12,9 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QVBoxLayout, QWidget
 
+from uvi_demo.services.uvi_companion_services import UVICompanionService
+from uvi_demo.ui.widgets.companion_card import CompanionCard
+
 
 ASSET_DIR = Path(__file__).resolve().parents[1] / "assets"
 DRIVE_LOOP_CANDIDATES = (
@@ -127,9 +130,36 @@ class CockpitScreen(QWidget):
         self.display = PanoramicDisplay(self.state)
         layout.addWidget(self.display, 1, 2, 1, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+        self.companion = UVICompanionService(parent=self)
+        self.companion_card = CompanionCard()
+        layout.addWidget(
+            self.companion_card,
+            2,
+            2,
+            1,
+            2,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
+        )
+        self.companion_card.listen_requested.connect(self.companion.listen)
+        self.companion_card.text_submitted.connect(self.companion_card.show_text_audio_input)
+        self.companion_card.text_submitted.connect(self.companion.submit_text)
+        self.companion.transcript_ready.connect(self.companion_card.show_user_text)
+        self.companion.response_ready.connect(self._show_companion_response)
+        self.companion.status_changed.connect(self.companion_card.set_status)
+        self.companion.listening_changed.connect(self.companion_card.set_listening)
+        self.companion.error_occurred.connect(self.companion_card.set_status)
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._advance_simulation)
         self.timer.start(33)
+
+    def activate_companion(self) -> None:
+        """Keep the companion ready without playing a startup greeting."""
+        self.companion_card.set_status("Ready - type text for audio output")
+
+    def _show_companion_response(self, message: str) -> None:
+        self.state.companion_message = message
+        self.companion_card.show_companion_text(message)
 
     def _advance_simulation(self) -> None:
         self.state.advance()

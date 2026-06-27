@@ -29,6 +29,7 @@ BOOT_STEPS = [
     "Starting Producer Services...",
     "Starting Dashboard Application...",
     "Starting UVI Companion...",
+    "Starting UVI Voice Output...",
 ]
 
 
@@ -135,7 +136,8 @@ class BootScreen(QMainWindow):
         root.addLayout(footer)
 
         self.stack.addWidget(self.boot_page)
-        self.stack.addWidget(CockpitScreen())
+        self.cockpit = CockpitScreen()
+        self.stack.addWidget(self.cockpit)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.advance_boot)
@@ -152,6 +154,7 @@ class BootScreen(QMainWindow):
         if self._step_index >= len(BOOT_STEPS):
             self.timer.stop()
             self.stack.setCurrentIndex(1)
+            self.cockpit.activate_companion()
             return
 
         item = self.steps_list.item(self._step_index)

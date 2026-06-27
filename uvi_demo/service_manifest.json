@@ -68,6 +68,11 @@
       "name": "uvi_companion",
       "module": "uvi_demo.services.uvi_companion_services",
       "depends_on": ["kuksa_data_broker"]
+    },
+    {
+      "name": "uvi_voice_output",
+      "module": "uvi_demo.services.uvi_voice_output_service",
+      "depends_on": ["uvi_companion"]
     }
   ]
 }
